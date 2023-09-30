@@ -30,7 +30,7 @@ JsonArray todos;
 JsonObject weather;
 uint8_t* framebuffer = NULL;
 Preferences preferences;
-bool event_days[31];
+bool event_days[31 + 7];
 
 enum alignment { LEFT,
                  RIGHT,
@@ -107,7 +107,7 @@ void disconnectWiFi() {
 void getEvents() {
     URL url(EVENTS_HOST);
 
-    url.add("id", TICKTICK_ID).add("todoID", TICKTICK_TODO_ID);
+    url.add("id", TICKTICK_ID);
 
     if (LATITUDE && LONGITUDE) {
         url
@@ -116,10 +116,8 @@ void getEvents() {
             .add("lon", LONGITUDE);
     }
 
-    // #if !DEBUG
     if (esp_sleep_get_wakeup_cause())  // Wakeup not caused by initial start
         url.add("hash", preferences.getString("hash", "").c_str());
-    // #endif
 
     Serial.println(url);
 
@@ -209,21 +207,28 @@ void drawEvents() {
     uint8_t current_month;
     uint8_t current_day;
 
+    int m2s = dateTime("t").toInt() - day();
+
+    // Ensure all events are added to calendar highlights
+    bool drawEvents = true;
+
     // Loop over all events
     for (JsonObject event : cal_events) {
         y_cursor += LINE_HEIGHT;
-        if (y_cursor > EPD_HEIGHT) break;
+        if (y_cursor > EPD_HEIGHT) drawEvents = false;
 
         time_t events_time = parseTime(event["start"]);
 
         // New Month
         if (month(events_time) != current_month) {
             // Prevent event cutoff after new month
-            if ((y_cursor + LINE_HEIGHT) > EPD_HEIGHT) break;
+            if ((y_cursor + LINE_HEIGHT) > EPD_HEIGHT) drawEvents = false;
 
             current_month = month(events_time);
             current_day = 0;
-            drawString(poppins_r_10, 30, y_cursor, dateTime(events_time, "M"), CENTER);
+
+            if (drawEvents) drawString(poppins_r_10, 30, y_cursor, dateTime(events_time, "M"), CENTER);
+
             y_cursor += LINE_HEIGHT + 5;
         }
 
@@ -231,79 +236,109 @@ void drawEvents() {
         if (day(events_time) != current_day) {
             current_day = day(events_time);
 
-            if (current_day == day()) {
-                drawRoundedSquare(30, y_cursor - 10, 38, 4, 2, 0x00);
+            if (drawEvents) {
+                if (current_day == day()) {
+                    drawRoundedSquare(30, y_cursor - 10, 38, 4, 2, 0x00);
+                }
+
+                drawString(30, y_cursor, dateTime(events_time, "j"), CENTER);
             }
 
-            if (month() == current_month) {
-                event_days[current_day - 1] = true;
+            if (month() == current_month || ((month() + 1) % 12) == current_month) {
+                bool isCurrentMonth = month() == current_month;
+                event_days[m2s * !isCurrentMonth + current_day - (day() * isCurrentMonth)] = true;
             }
-            drawString(30, y_cursor, dateTime(events_time, "j"), CENTER);
         }
 
-        // Event title
-        drawString(75, y_cursor, event["title"], LEFT, 350);
+        if (drawEvents) {
+            // Event title
+            drawString(75, y_cursor, event["title"], LEFT, 350);
 
-        // If event has a start time
-        if (event.containsKey("end")) {
-            drawString(450, y_cursor, dateTime(events_time, "g:i a"), LEFT);
+            // If event has a start time
+            if (event.containsKey("end")) {
+                drawString(450, y_cursor, dateTime(events_time, "g:i a"), LEFT);
+            }
         }
     }
 }
 
-void drawToDo() {
-    fillRect(600, TITLE_BAR_Y + 15, 2, EPD_HEIGHT, 0x00);
+// void drawToDo() {
+//     fillRect(600, TITLE_BAR_Y + 15, 2, EPD_HEIGHT, 0x00);
 
-    drawString(625, START_HEIGHT, "To-Do", LEFT);
+//     drawString(625, START_HEIGHT, "To-Do", LEFT);
 
-    int y_cursor = START_HEIGHT + LINE_HEIGHT / 2;
+//     int y_cursor = START_HEIGHT + LINE_HEIGHT / 2;
 
-    for (JsonVariant todo : todos) {
-        y_cursor += LINE_HEIGHT;
-        drawRoundedSquare(640, y_cursor - 10, 24, 4, 2, 0x00);
-        drawString(665, y_cursor, todo, LEFT, 280);
-    }
-}
+//     for (JsonVariant todo : todos) {
+//         y_cursor += LINE_HEIGHT;
+//         drawRoundedSquare(640, y_cursor - 10, 24, 4, 2, 0x00);
+//         drawString(665, y_cursor, todo, LEFT, 280);
+//     }
+// }
 
 void drawCalendar() {
     const int START_X = 600;
-    const int START_Y = START_HEIGHT + 15;
+    int y_cursor = START_HEIGHT + 15;
 
-    const int day_of_first = (weekday() - (day() % 7) + 7) % 7;
-    const int days_in_month = dateTime("t").toInt();
+    const char* WEEKDAY_NAMES[7] = {"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"};
+
+    time_t t = now();
+    tmElements_t tm;
+
+    const int m2s = dateTime("t").toInt() - day();
 
     fillRect(START_X, TITLE_BAR_Y + 15, 2, EPD_HEIGHT, 0x80);
 
-    drawString(START_X + 165, START_Y, dateTime("F"), CENTER);
+    while (1) {
+        int weekdayOfFirst = (weekday(t) - (day(t) % 7) + 7) % 7;
+        int daysInMonth = dateTime(t, "t").toInt();
 
-    const char* daysOfTheWeek[7] = {"Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"};
+        // Draw month name
+        drawString(START_X + 165, y_cursor, dateTime(t, "F"), CENTER);
 
-    // Draw days of the week
-    for (int day = 0; day < 7; day++) {
-        drawString(
-            poppins_r_10,
-            START_X + 50 + day * 42,
-            START_Y + 45,
-            daysOfTheWeek[day],
-            CENTER);
-    }
-
-    // Draw day numbers
-    for (int day_number = 0; day_number < days_in_month; day_number++) {
-        int x = START_X + 50 + ((day_of_first + day_number) % 7) * 42;
-        int y = START_Y + 40 + ((floor((day_of_first + day_number) / 7) + 1) * 50);
-
-        if (day_number + 1 == day()) {
-            drawRoundedSquare(x, y - 10, 42, 4, 2, 0x00);
-        } else if (event_days[day_number]) {
-            fillRect(x - 13, y + 7, 28, 2, 0xAA);
+        // Draw days of the week
+        for (int day = 0; day < 7; day++) {
+            drawString(
+                poppins_r_10,
+                START_X + 50 + day * 42,
+                y_cursor + 45,
+                WEEKDAY_NAMES[day],
+                CENTER);
         }
 
-        drawString(
-            x,
-            y,
-            String(day_number + 1),
-            CENTER);
+        auto firstOfWeek = [weekdayOfFirst](int date) { return (date - ((weekdayOfFirst + date - 1) % 7)); };
+
+        int firstDay = max(firstOfWeek(day(t)) - 1, 0);
+        int startingWeek = floor((weekdayOfFirst + firstDay) / 7);
+        bool isCurrentMonth = month() == month(t);
+
+        int x, y;
+        // Draw day numbers
+        for (int day_number = firstDay; day_number < daysInMonth; day_number++) {
+            x = START_X + 50 + ((weekdayOfFirst + day_number) % 7) * 42;
+            y = y_cursor + 90 + ((floor((weekdayOfFirst + day_number) / 7) - startingWeek) * 42);
+
+            if (y > EPD_HEIGHT) return;
+
+            if (t == now() && day_number + 1 == day()) {  // Highlight today
+                drawRoundedSquare(x, y - 10, 42, 4, 2, 0x00);
+            } else if (((isCurrentMonth && (day_number + 1) > day()) || !isCurrentMonth) && event_days[m2s * !isCurrentMonth + (day_number + 1) - (day() * isCurrentMonth)]) {  // Underline days with events
+                fillRect(x - 13, y + 7, 28, 2, 0xAA);
+            }
+
+            drawString(
+                x,
+                y,
+                String(day_number + 1),
+                CENTER);
+        }
+
+        y_cursor = y + 60;
+
+        breakTime(t, tm);
+        tm.Month++;
+        tm.Day = 1;
+        t = makeTime(tm);
     }
 }
 
