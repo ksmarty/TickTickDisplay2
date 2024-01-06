@@ -109,12 +109,12 @@ void getEvents() {
 
     url.add("id", TICKTICK_ID);
 
-    // if (LATITUDE && LONGITUDE) {
-    //     url
-    //         .add("weather", "true")
-    //         .add("lat", LATITUDE)
-    //         .add("lon", LONGITUDE);
-    // }
+#if LATITUDE && LONGITUDE
+    url
+        .add("weather", "true")
+        .add("lat", LATITUDE)
+        .add("lon", LONGITUDE);
+#endif
 
     if (esp_sleep_get_wakeup_cause())  // Wakeup not caused by initial start
         url.add("hash", preferences.getString("hash", "").c_str());
