@@ -25,21 +25,22 @@
 #include "lib/images/sun_wind.h"
 #include "lib/pins.h"
 
+const int TITLE_BAR_Y = 35;
+const int EPD_CENTER = EPD_WIDTH / 2;
+const int START_HEIGHT = 85;
+const int LINE_HEIGHT = 35;
+const int EVENT_DAYS_SIZE = 31 + 7;
+
 JsonArray cal_events;
 JsonArray todos;
 JsonObject weather;
 uint8_t* framebuffer = NULL;
 Preferences preferences;
-bool event_days[31 + 7];
+bool event_days[EVENT_DAYS_SIZE];
 
 enum alignment { LEFT,
                  RIGHT,
                  CENTER };
-
-const int TITLE_BAR_Y = 35;
-const int EPD_CENTER = EPD_WIDTH / 2;
-const int START_HEIGHT = 85;
-const int LINE_HEIGHT = 35;
 
 class URL {
     String url;
@@ -67,12 +68,11 @@ void setup() {
     connectWiFi();
     getEvents();
     disconnectWiFi();
-    drawTitleBar();
-    if (!cal_events.isNull()) {
+    if (cal_events.size()) {
         drawEvents();
         drawCalendar();
-        // drawToDo();
     }
+    drawTitleBar();
     pushToDisplay();
     sleep();
 }
@@ -109,12 +109,12 @@ void getEvents() {
 
     url.add("id", TICKTICK_ID);
 
-    if (LATITUDE && LONGITUDE) {
-        url
-            .add("weather", "true")
-            .add("lat", LATITUDE)
-            .add("lon", LONGITUDE);
-    }
+    // if (LATITUDE && LONGITUDE) {
+    //     url
+    //         .add("weather", "true")
+    //         .add("lat", LATITUDE)
+    //         .add("lon", LONGITUDE);
+    // }
 
     if (esp_sleep_get_wakeup_cause())  // Wakeup not caused by initial start
         url.add("hash", preferences.getString("hash", "").c_str());
@@ -158,7 +158,11 @@ void drawTitleBar() {
     fillRect(0, TITLE_BAR_Y + 15, EPD_WIDTH, 2, 0x00);
 
     // Updated At
-    drawString(10, TITLE_BAR_Y, dateTime("l n/j g:i a"), LEFT);
+    drawString(10, TITLE_BAR_Y, dateTime("l M j g:i a"), LEFT);
+
+    drawBattery(EPD_WIDTH - 20, 25, RIGHT);
+
+    if (weather.isNull()) return;
 
     // Weather text
     String weather_current = weather["current"].as<String>() + "°";
@@ -198,8 +202,6 @@ void drawTitleBar() {
         .width = 32,
         .height = 32};
     epd_copy_to_framebuffer(area, weather_image, framebuffer);
-
-    drawBattery(EPD_WIDTH - 20, 25, RIGHT);
 }
 
 void drawEvents() {
@@ -209,8 +211,16 @@ void drawEvents() {
 
     int m2s = dateTime("t").toInt() - day();
 
-    // Ensure all events are added to calendar highlights
+    tmElements_t tm;
+    breakTime(now(), tm);
+    time_t today = makeTime(0, 0, 0, tm.Day, tm.Month, tm.Year);
+
+    // When true, events will be drawn to the list
+    // When false, they will not be drawn, but still added to the calendar
     bool drawEvents = true;
+
+    // Separate overdue events at the top
+    bool isOverdue = true;
 
     // Loop over all events
     for (JsonObject event : cal_events) {
@@ -219,34 +229,55 @@ void drawEvents() {
 
         time_t events_time = parseTime(event["start"]);
 
+        if (isOverdue && events_time >= today) {
+            isOverdue = false;
+        }
+
+        // Overdue Text
+        if (isOverdue && y_cursor == START_HEIGHT) {
+            drawString(poppins_r_10, 10, y_cursor, "Overdue", LEFT);
+
+            y_cursor += LINE_HEIGHT + 5;
+        }
+
         // New Month
-        if (month(events_time) != current_month) {
+        if (!isOverdue && month(events_time) != current_month) {
             // Prevent event cutoff after new month
             if ((y_cursor + LINE_HEIGHT) > EPD_HEIGHT) drawEvents = false;
 
             current_month = month(events_time);
             current_day = 0;
 
-            if (drawEvents) drawString(poppins_r_10, 30, y_cursor, dateTime(events_time, "M"), CENTER);
-
-            y_cursor += LINE_HEIGHT + 5;
+            if (drawEvents) {
+                drawString(poppins_r_10, 30, y_cursor, dateTime(events_time, "M"), CENTER);
+                y_cursor += LINE_HEIGHT + 5;
+            }
         }
 
         // New Day
-        if (day(events_time) != current_day) {
+        if (isOverdue || day(events_time) != current_day) {
+            bool isCurrentMonth = month() == current_month;
             current_day = day(events_time);
 
             if (drawEvents) {
-                if (current_day == day()) {
+                // Draw box around current day
+                if (current_day == day() && isCurrentMonth) {
                     drawRoundedSquare(30, y_cursor - 10, 38, 4, 2, 0x00);
                 }
 
-                drawString(30, y_cursor, dateTime(events_time, "j"), CENTER);
+                drawString(30, y_cursor,
+                           isOverdue
+                               ? "!!!"
+                               : dateTime(events_time, "j"),
+                           CENTER);
             }
 
-            if (month() == current_month || ((month() + 1) % 12) == current_month) {
-                bool isCurrentMonth = month() == current_month;
-                event_days[m2s * !isCurrentMonth + current_day - (day() * isCurrentMonth)] = true;
+            if (isCurrentMonth || ((month() + 1) % 12) == current_month) {
+                int dateIndex = m2s * !isCurrentMonth + current_day - (day() * isCurrentMonth);
+                if (dateIndex >= 0 && dateIndex < EVENT_DAYS_SIZE) {
+                    event_days[dateIndex] = true;
+                    Serial.println(dateIndex);
+                }
             }
         }
 
@@ -261,20 +292,6 @@ void drawEvents() {
         }
     }
 }
-
-// void drawToDo() {
-//     fillRect(600, TITLE_BAR_Y + 15, 2, EPD_HEIGHT, 0x00);
-
-//     drawString(625, START_HEIGHT, "To-Do", LEFT);
-
-//     int y_cursor = START_HEIGHT + LINE_HEIGHT / 2;
-
-//     for (JsonVariant todo : todos) {
-//         y_cursor += LINE_HEIGHT;
-//         drawRoundedSquare(640, y_cursor - 10, 24, 4, 2, 0x00);
-//         drawString(665, y_cursor, todo, LEFT, 280);
-//     }
-// }
 
 void drawCalendar() {
     const int START_X = 600;
@@ -353,7 +370,6 @@ void pushToDisplay() {
                                 .height = TITLE_BAR_Y + 15})
                       : epd_full_screen();
 
-    epd_init();
     epd_poweron();
     epd_clear_area(area);
     epd_draw_grayscale_image(area, framebuffer);  // Update the screen
@@ -412,7 +428,7 @@ void drawString(GFXfont const& font, int x, int y, String text, alignment align,
 
     if (align == RIGHT) x = x - w;
     if (align == CENTER) x = x - w / 2;
-    // int cursor_y = y + h; // make cursor anchor from bottom left
+    // int y = y + h; // make cursor anchor from bottom left
     write_string((GFXfont*)&font, data, &x, &y, framebuffer);
 }
 
@@ -546,12 +562,17 @@ void drawBattery(int x, int y, alignment align) {
         Serial.printf("eFuse Vref:%u mV\n", adc_chars.vref);
         vref = adc_chars.vref;
     }
+    epd_init();
+    epd_poweron();
+    delay(10);
     float voltage = analogRead(36) / 4096.0 * 6.566 * (vref / 1000.0);
     if (voltage > 1) {  // Only display if there is a valid reading
         percentage = 2836.9625 * pow(voltage, 4) - 43987.4889 * pow(voltage, 3) + 255233.8134 * pow(voltage, 2) - 656689.7123 * voltage + 632041.7303;
         if (voltage >= 4.20) percentage = 100;
         if (voltage <= 3.20) percentage = 0;  // orig 3.5
     }
+
+    drawString(x - MAIN_WIDTH, y + HEIGHT / 2 - 4, String(voltage) + "v", RIGHT);
 
     int BATTERY = min((int)round(percentage / (100 / NUMBER_OF_TICKS)), NUMBER_OF_TICKS);
 

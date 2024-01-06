@@ -2,3 +2,4 @@ build
 .vscode/**
 !.vscode/arduino.json
 __pycache__
+lib/config.h
