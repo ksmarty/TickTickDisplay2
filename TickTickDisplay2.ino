@@ -118,6 +118,8 @@ void getEvents() {
 
     if (esp_sleep_get_wakeup_cause())  // Wakeup not caused by initial start
         url.add("hash", preferences.getString("hash", "").c_str());
+    else
+        preferences.clear();
 
     Serial.println(url);
 
@@ -133,7 +135,7 @@ void getEvents() {
     http.begin(client, url);
     int status_code = http.GET();
 
-    DynamicJsonDocument response(3072);
+    DynamicJsonDocument response(4096);
 
     DeserializationError error = deserializeJson(response, client.readString());
 
